@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .backbone import resnet18
+from .original_backbone import resnet18
 from .fusion_modules import SumFusion, ConcatFusion, FiLM, GatedFusion
 
 

@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .backbone import resnet18, resnet34, resnet101
+from .backbone import resnet18
+from .original_backbone import resnet34, resnet101
 from .fusion_modules import SumFusion, ConcatFusion, FiLM, GatedFusion
 
 
@@ -71,6 +72,8 @@ class AVClassifier(nn.Module):
             n_classes = 6
         elif args.dataset == 'AVE':
             n_classes = 28
+        elif args.dataset == 'AVMNIST':
+            n_classes = 10
         else:
             raise NotImplementedError('Incorrect dataset name {}'.format(args.dataset))
 
@@ -86,7 +89,10 @@ class AVClassifier(nn.Module):
             raise NotImplementedError('Incorrect fusion method: {}!'.format(fusion))
 
         self.audio_net = resnet18(modality='audio')
-        self.visual_net = resnet18(modality='visual')
+        if args.dataset == 'AVMNIST':
+            self.visual_net = resnet18(modality='image')
+        else:
+            self.visual_net = resnet18(modality='visual')
 
     def forward(self, audio, visual):
 

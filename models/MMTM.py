@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import torchvision.models as models
-from .backbone import resnet18
+from .original_backbone import resnet18
 # import glob
 import pickle
 # import gin

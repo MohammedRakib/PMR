@@ -9,9 +9,11 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from dataset.CGMNIST import CGMNISTDataset
-from dataset.CramedDataset import CramedDataset
+from dataset.CramedDataset import CremadDataset
 from dataset.AVEDataset import AVEDataset
 from dataset.dataset import AVDataset
+from dataset.VGGSoundDataset import VGGSound
+from dataset.AVMNISTDataset import AVMNIST
 from models.basic_model import AVClassifier, CGClassifier
 from utils.utils import setup_seed, weight_init
 
@@ -22,7 +24,7 @@ import time
 def get_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', required=True, type=str,
-                        help='VGGSound, KineticSound, CREMAD, AVE')
+                        help='VGGSound, KineticSound, CREMAD, AVE, AVMNIST')
     parser.add_argument('--modulation', default='OGM_GE', type=str,
                         choices=['Normal', 'OGM', 'OGM_GE', 'Acc', 'Proto'])
     parser.add_argument('--fusion_method', default='concat', type=str,
@@ -70,6 +72,8 @@ def EU_dist(x1, x2):
     d_matrix = torch.zeros(x1.shape[0], x2.shape[0]).to(x1.device)
     for i in range(x1.shape[0]):
         for j in range(x2.shape[0]):
+            # epsilon = 1e-8
+            # d = torch.sqrt(torch.dot((x1[i] - x2[j]), (x1[i] - x2[j])) + epsilon)
             d = torch.sqrt(torch.dot((x1[i] - x2[j]), (x1[i] - x2[j])))
             d_matrix[i, j] = d
     return d_matrix
@@ -126,7 +130,7 @@ def train_epoch(args, epoch, model, device, dataloader, optimizer, scheduler,
         optimizer.zero_grad()
 
         # TODO: make it simpler and easier to extend
-        if args.dataset != 'CGMNIST':
+        if args.dataset != 'CGMNIST' and args.dataset != 'AVMNIST':
             a, v, out = model(spec.unsqueeze(1).float(), image.float())
         else:
             a, v, out = model(spec, image)  # gray colored
@@ -287,6 +291,118 @@ def train_epoch(args, epoch, model, device, dataloader, optimizer, scheduler,
            _a_angle / len(dataloader), _v_angle / len(dataloader), \
            _ratio_a / len(dataloader), _ratio_a_p / len(dataloader), _a_diff / len(dataloader), _v_diff / len(dataloader)
 
+# def train_epoch(args, epoch, model, device, dataloader, optimizer, scheduler,
+#                 audio_proto, visual_proto, writer=None):
+#     criterion = nn.CrossEntropyLoss()
+#     softmax = nn.Softmax(dim=1)
+#     relu = nn.ReLU(inplace=True)
+#     tanh = nn.Tanh()
+
+#     model.train()
+#     print("Start training ... ")
+
+#     _loss = 0
+#     _loss_a = 0
+#     _loss_v = 0
+#     _loss_p_a = 0
+#     _loss_p_v = 0
+
+#     _a_angle = 0
+#     _v_angle = 0
+#     _a_diff = 0
+#     _v_diff = 0
+#     _ratio_a = 0
+#     _ratio_a_p = 0
+
+#     for step, (spec, image, label) in enumerate(dataloader):
+
+#         spec = spec.to(device)
+#         image = image.to(device)
+#         label = label.to(device)
+
+#         optimizer.zero_grad()
+
+#         # Model forward pass
+#         if args.dataset != 'CGMNIST' and args.dataset != 'AVMNIST':
+#             a, v, out = model(spec.unsqueeze(1).float(), image.float())
+#         else:
+#             a, v, out = model(spec, image)
+
+
+#         # Calculate modality-specific outputs based on fusion method
+#         if args.fusion_method == 'sum':
+#             out_v = (torch.mm(v, torch.transpose(model.fusion_module.fc_y.weight, 0, 1)) +
+#                      model.fusion_module.fc_y.bias)
+#             out_a = (torch.mm(a, torch.transpose(model.fusion_module.fc_x.weight, 0, 1)) +
+#                      model.fusion_module.fc_x.bias)
+#         elif args.fusion_method == 'concat':
+#             weight_size = model.fusion_module.fc_out.weight.size(1)
+#             out_v = (torch.mm(v, torch.transpose(model.fusion_module.fc_out.weight[:, weight_size // 2:], 0, 1))
+#                      + model.fusion_module.fc_out.bias / 2)
+#             out_a = (torch.mm(a, torch.transpose(model.fusion_module.fc_out.weight[:, :weight_size // 2], 0, 1))
+#                      + model.fusion_module.fc_out.bias / 2)
+#         else:
+#             out_v, out_a = out, out
+
+
+#         # Calculate prototype similarity
+#         audio_sim = -EU_dist(a, audio_proto)
+#         visual_sim = -EU_dist(v, visual_proto)
+
+#         # Modulation for prototype-based loss adjustment
+#         if args.modulation == 'Proto' and args.modulation_starts <= epoch <= args.modulation_ends:
+#             score_a_p = sum([softmax(audio_sim)[i][label[i]] for i in range(audio_sim.size(0))])
+#             score_v_p = sum([softmax(visual_sim)[i][label[i]] for i in range(visual_sim.size(0))])
+#             ratio_a_p = score_a_p / score_v_p
+
+#             score_v = sum([softmax(out_v)[i][label[i]] for i in range(out_v.size(0))])
+#             score_a = sum([softmax(out_a)[i][label[i]] for i in range(out_a.size(0))])
+#             ratio_a = score_a / score_v
+
+#             loss_proto_a = criterion(audio_sim, label)
+#             loss_proto_v = criterion(visual_sim, label)
+
+#             beta, lam = (0, 1 * args.alpha) if ratio_a_p > 1 else (1 * args.alpha, 0) if ratio_a_p < 1 else (0, 0)
+#             loss = criterion(out, label) + beta * loss_proto_a + lam * loss_proto_v
+#             loss_v = criterion(out_v, label)
+#             loss_a = criterion(out_a, label)
+
+#         else:
+#             loss = criterion(out, label)
+#             loss_proto_v = criterion(visual_sim, label)
+#             loss_proto_a = criterion(audio_sim, label)
+#             loss_v = criterion(out_v, label)
+#             loss_a = criterion(out_a, label)
+
+#             score_a_p = sum([softmax(audio_sim)[i][label[i]] for i in range(audio_sim.size(0))])
+#             score_v_p = sum([softmax(visual_sim)[i][label[i]] for i in range(visual_sim.size(0))])
+#             ratio_a_p = score_a_p / score_v_p
+#             score_v = sum([softmax(out_v)[i][label[i]] for i in range(out_v.size(0))])
+#             score_a = sum([softmax(out_a)[i][label[i]] for i in range(out_a.size(0))])
+#             ratio_a = score_a / score_v
+
+#         # Backward pass and optimizer step
+#         loss.backward()
+#         optimizer.step()
+
+#         # Accumulate loss metrics
+#         _loss += loss.item()
+#         _loss_a += loss_a.item()
+#         _loss_v += loss_v.item()
+#         _loss_p_a += loss_proto_a.item()
+#         _loss_p_v += loss_proto_v.item()
+#         _ratio_a += ratio_a
+#         _ratio_a_p += ratio_a_p
+
+#     if args.optimizer == 'SGD':
+#         scheduler.step()
+
+#     return _loss / len(dataloader), _loss_a / len(dataloader), _loss_v / len(dataloader), \
+#            _loss_p_a / len(dataloader), _loss_p_v / len(dataloader), \
+#            _a_angle / len(dataloader), _v_angle / len(dataloader), \
+#            _ratio_a / len(dataloader), _ratio_a_p / len(dataloader), _a_diff / len(dataloader), _v_diff / len(dataloader)
+
+
 
 def valid(args, model, device, dataloader, audio_proto, visual_proto):
     softmax = nn.Softmax(dim=1)
@@ -300,6 +416,8 @@ def valid(args, model, device, dataloader, audio_proto, visual_proto):
     elif args.dataset == 'AVE':
         n_classes = 28
     elif args.dataset == 'CGMNIST':
+        n_classes = 10
+    elif args.dataset == 'AVMNIST':
         n_classes = 10
     else:
         raise NotImplementedError('Incorrect dataset name {}'.format(args.dataset))
@@ -321,7 +439,7 @@ def valid(args, model, device, dataloader, audio_proto, visual_proto):
             image = image.to(device)
             label = label.to(device)
 
-            if args.dataset != 'CGMNIST':
+            if args.dataset != 'CGMNIST' and args.dataset != 'AVMNIST':
                 a, v, out = model(spec.unsqueeze(1).float(), image.float())
             else:
                 a, v, out = model(spec, image)  # gray colored
@@ -378,8 +496,7 @@ def valid(args, model, device, dataloader, audio_proto, visual_proto):
 
     return sum(acc) / sum(num), sum(acc_a) / sum(num), sum(acc_v) / sum(num), \
            sum(acc_a_p) / sum(num), sum(acc_v_p) / sum(num)
-
-
+           
 def calculate_prototype(args, model, dataloader, device, epoch, a_proto=None, v_proto=None):
     if args.dataset == 'VGGSound':
         n_classes = 309
@@ -391,6 +508,8 @@ def calculate_prototype(args, model, dataloader, device, epoch, a_proto=None, v_
         n_classes = 28
     elif args.dataset == 'CGMNIST':
         n_classes = 10
+    elif args.dataset == 'AVMNIST':
+        n_classes = 10
     else:
         raise NotImplementedError('Incorrect dataset name {}'.format(args.dataset))
 
@@ -398,29 +517,26 @@ def calculate_prototype(args, model, dataloader, device, epoch, a_proto=None, v_
     visual_prototypes = torch.zeros(n_classes, args.embed_dim).to(device)
     count_class = [0 for _ in range(n_classes)]
 
-    # calculate prototype
     model.eval()
     with torch.no_grad():
         sample_count = 0
         all_num = len(dataloader)
         for step, (spec, image, label) in enumerate(dataloader):
-            spec = spec.to(device)  # B x 257 x 1004
-            image = image.to(device)  # B x 3(image count) x 3 x 224 x 224
-            label = label.to(device)  # B
+            spec = spec.to(device)
+            image = image.to(device)
+            label = label.to(device)
 
-            # TODO: make it simpler and easier to extend
-            if args.dataset != 'CGMNIST':
+            # Model forward pass
+            if args.dataset not in ['CGMNIST', 'AVMNIST']:
                 a, v, out = model(spec.unsqueeze(1).float(), image.float())
             else:
-                a, v, out = model(spec, image)  # gray colored
+                a, v, out = model(spec, image)
 
             for c, l in enumerate(label):
                 l = l.long()
                 count_class[l] += 1
                 audio_prototypes[l, :] += a[c, :]
                 visual_prototypes[l, :] += v[c, :]
-                # if l == 22:
-                #     print('fea_a', a[c, :], audio_prototypes[l, :])
 
             sample_count += 1
             if args.dataset == 'AVE':
@@ -428,17 +544,83 @@ def calculate_prototype(args, model, dataloader, device, epoch, a_proto=None, v_
             else:
                 if sample_count >= all_num // 10:
                     break
-    for c in range(audio_prototypes.shape[0]):
-        audio_prototypes[c, :] /= count_class[c]
-        visual_prototypes[c, :] /= count_class[c]
 
-    if epoch <= 0:
-        audio_prototypes = audio_prototypes
-        visual_prototypes = visual_prototypes
-    else:
+    # Average prototypes per class
+    for c in range(audio_prototypes.shape[0]):
+        if count_class[c] > 0:
+            audio_prototypes[c, :] /= count_class[c]
+            visual_prototypes[c, :] /= count_class[c]
+
+    # Update prototypes with momentum
+    if epoch > 0:
+        assert a_proto is not None and v_proto is not None, "Previous prototypes (a_proto, v_proto) must be provided after epoch 0"
         audio_prototypes = (1 - args.momentum_coef) * audio_prototypes + args.momentum_coef * a_proto
         visual_prototypes = (1 - args.momentum_coef) * visual_prototypes + args.momentum_coef * v_proto
+
     return audio_prototypes, visual_prototypes
+
+
+# def calculate_prototype(args, model, dataloader, device, epoch, a_proto=None, v_proto=None):
+#     if args.dataset == 'VGGSound':
+#         n_classes = 309
+#     elif args.dataset == 'KineticSound':
+#         n_classes = 31
+#     elif args.dataset == 'CREMAD':
+#         n_classes = 6
+#     elif args.dataset == 'AVE':
+#         n_classes = 28
+#     elif args.dataset == 'CGMNIST':
+#         n_classes = 10
+#     elif args.dataset == 'AVMNIST':
+#         n_classes = 10
+#     else:
+#         raise NotImplementedError('Incorrect dataset name {}'.format(args.dataset))
+
+#     audio_prototypes = torch.zeros(n_classes, args.embed_dim).to(device)
+#     visual_prototypes = torch.zeros(n_classes, args.embed_dim).to(device)
+#     count_class = [0 for _ in range(n_classes)]
+
+#     # calculate prototype
+#     model.eval()
+#     with torch.no_grad():
+#         sample_count = 0
+#         all_num = len(dataloader)
+#         for step, (spec, image, label) in enumerate(dataloader):
+#             spec = spec.to(device)  # B x 257 x 1004
+#             image = image.to(device)  # B x 3(image count) x 3 x 224 x 224
+#             label = label.to(device)  # B
+
+#             # TODO: make it simpler and easier to extend
+#             if args.dataset != 'CGMNIST'and args.dataset != 'AVMNIST':
+#                 a, v, out = model(spec.unsqueeze(1).float(), image.float())
+#             else:
+#                 a, v, out = model(spec, image)  # gray colored
+
+#             for c, l in enumerate(label):
+#                 l = l.long()
+#                 count_class[l] += 1
+#                 audio_prototypes[l, :] += a[c, :]
+#                 visual_prototypes[l, :] += v[c, :]
+#                 # if l == 22:
+#                 #     print('fea_a', a[c, :], audio_prototypes[l, :])
+
+#             sample_count += 1
+#             if args.dataset == 'AVE':
+#                 pass
+#             else:
+#                 if sample_count >= all_num // 10:
+#                     break
+#     for c in range(audio_prototypes.shape[0]):
+#         audio_prototypes[c, :] /= count_class[c]
+#         visual_prototypes[c, :] /= count_class[c]
+
+#     if epoch <= 0:
+#         audio_prototypes = audio_prototypes
+#         visual_prototypes = visual_prototypes
+#     else:
+#         audio_prototypes = (1 - args.momentum_coef) * audio_prototypes + args.momentum_coef * a_proto
+#         visual_prototypes = (1 - args.momentum_coef) * visual_prototypes + args.momentum_coef * v_proto
+#     return audio_prototypes, visual_prototypes
 
 
 def main():
@@ -471,14 +653,14 @@ def main():
         scheduler = None
 
     if args.dataset == 'VGGSound':
-        train_dataset = VGGSound(args, mode='train')
-        test_dataset = VGGSound(args, mode='test')
+        train_dataset = VGGSound(mode='train')
+        test_dataset = VGGSound(mode='test')
     elif args.dataset == 'KineticSound':
         train_dataset = AVDataset(args, mode='train')
         test_dataset = AVDataset(args, mode='test')
     elif args.dataset == 'CREMAD':
-        train_dataset = CramedDataset(args, mode='train')
-        test_dataset = CramedDataset(args, mode='test')
+        train_dataset = CremadDataset(mode='train')
+        test_dataset = CremadDataset(mode='test')
     elif args.dataset == 'AVE':
         train_dataset = AVEDataset(args, mode='train')
         test_dataset = AVEDataset(args, mode='test')
@@ -487,16 +669,30 @@ def main():
         train_dataset = CGMNISTDataset(args, mode='train')
         test_dataset = CGMNISTDataset(args, mode='test')
         val_dataset = CGMNISTDataset(args, mode='test')
+    elif args.dataset == 'AVMNIST':
+        train_dataset = AVMNIST(mode='train')
+        test_dataset = AVMNIST(mode='test')
+        val_dataset = AVMNIST(mode='test')
     else:
         raise NotImplementedError('Incorrect dataset name {}! '
                                   'Only support VGGSound, KineticSound and CREMA-D for now!'.format(args.dataset))
+        
+    print('train:', len(train_dataset), 'test:', len(test_dataset))
+        
+    # print("\n WARNING: Testing on a small dataset for student \n")
+    # train_dataset = torch.utils.data.Subset(train_dataset, range(100))
+    # test_dataset = torch.utils.data.Subset(test_dataset, range(10))
 
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size,
-                                  shuffle=True, pin_memory=False)  # 计算机的内存充足的时候，可以设置pin_memory=True
+                                  shuffle=True, pin_memory=True, num_workers=4)  # 计算机的内存充足的时候，可以设置pin_memory=True
 
     test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size,
-                                 shuffle=False, pin_memory=False)
+                                 shuffle=False, pin_memory=True, num_workers=4)
 
+    for spec, image, label in train_dataloader:
+        print(spec.shape, image.shape, label.shape)
+        break
+    
     if args.dataset == 'AVE':
         val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size,
                                     shuffle=False, pin_memory=False)
@@ -528,6 +724,10 @@ def main():
         f_trainloss = open(trainloss_file, 'a')
 
         best_acc = 0.0
+        best_acc_a = 0.0
+        best_acc_v = 0.0
+        best_acc_a_p = 0.0
+        best_acc_v_p = 0.0
 
         epoch = 0
 
@@ -581,21 +781,27 @@ def main():
                               "\n")
             f_trainloss.flush()
 
-            # if acc > best_acc or (epoch + 1) % 10 == 0:
-            #     if acc > best_acc:
-            #         best_acc = float(acc)
-            #
-            #     print('Saving model....')
-            #     torch.save(
-            #         {
-            #             'model': model.state_dict(),
-            #             'optimizer': optimizer.state_dict(),
-            #             'scheduler': scheduler.state_dict()
-            #         },
-            #         os.path.join(save_path, 'epoch-{}.pt'.format(epoch))
-            #     )
-            #     print('Saved model!!!')
+            if acc > best_acc or (epoch + 1) % 10 == 0:
+                if acc > best_acc:
+                    best_acc = float(acc)
+                    best_acc_a = float(acc_a)
+                    best_acc_v = float(acc_v)
+                    best_acc_a_p = float(acc_a_p)
+                    best_acc_v_p = float(acc_v_p)
+            
+                print('Saving model....')
+                torch.save(
+                    {
+                        'model': model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'scheduler': scheduler.state_dict()
+                    },
+                    os.path.join(save_path, 'epoch-{}.pt'.format(epoch))
+                )
+                print('Saved model!!!')
         f_trainloss.close()
+
+        print(f"Best Accuracy: {best_acc} found at epoch {epoch} with acc_a_p: {best_acc_a_p}, acc_v_p: {best_acc_v_p}, acc_a: {best_acc_a}, acc_v: {best_acc_v}")
 
     else:
         # first load trained model
