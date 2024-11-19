@@ -1,5 +1,6 @@
 import argparse
 import os
+from random import seed
 
 import numpy as np
 import torch
@@ -7,6 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 from dataset.CGMNIST import CGMNISTDataset
 from dataset.CramedDataset import CremadDataset
@@ -17,7 +19,7 @@ from dataset.AVMNISTDataset import AVMNIST
 from models.basic_model import AVClassifier, CGClassifier
 from utils.utils import setup_seed, weight_init
 
-from dataset.VGGSoundDataset import VGGSound
+from dataset.VGGSoundDataset import VGGSound, VGGSoundInMemory
 import time
 
 
@@ -121,7 +123,7 @@ def train_epoch(args, epoch, model, device, dataloader, optimizer, scheduler,
     #              '-mon' + str(args.momentum_coef) + '-' + str(args.num_frame) + '-end' + str(args.modulation_ends) + '.txt'
     # f_angle = open(angle_file, 'a')
 
-    for step, (spec, image, label) in enumerate(dataloader):
+    for (spec, image, label) in tqdm(dataloader):
 
         spec = spec.to(device)  # B x 257 x 1004(CREMAD 299)
         image = image.to(device)  # B x 1(image count) x 3 x 224 x 224
@@ -269,8 +271,8 @@ def train_epoch(args, epoch, model, device, dataloader, optimizer, scheduler,
             v_angle = 0
             _a_angle += a_angle
             _v_angle += v_angle
-        print('loss: ', loss.data, 'loss_p_v: ', loss_proto_v.data, 'loss_p_a: ', loss_proto_a.data,
-              'loss_v: ', loss_v.data, 'loss_a: ', loss_a.data)
+        # print('loss: ', loss.data, 'loss_p_v: ', loss_proto_v.data, 'loss_p_a: ', loss_proto_a.data,
+        #       'loss_v: ', loss_v.data, 'loss_a: ', loss_a.data)
 
         optimizer.step()
 
@@ -282,6 +284,9 @@ def train_epoch(args, epoch, model, device, dataloader, optimizer, scheduler,
         _ratio_a += ratio_a
         _ratio_a_p += ratio_a_p
 
+        # Explicitly delete tensors to release memory
+        del spec, image, label, a, v, out, out_a, out_v, audio_sim, visual_sim, loss, loss_proto_a, loss_proto_v, loss_v, loss_a
+        
     if args.optimizer == 'SGD':
         scheduler.step()
     # f_angle.close()
@@ -433,7 +438,7 @@ def valid(args, model, device, dataloader, audio_proto, visual_proto):
         acc_a_p = [0.0 for _ in range(n_classes)]
         acc_v_p = [0.0 for _ in range(n_classes)]
 
-        for step, (spec, image, label) in enumerate(dataloader):
+        for (spec, image, label) in tqdm(dataloader):
 
             spec = spec.to(device)
             image = image.to(device)
@@ -493,6 +498,10 @@ def valid(args, model, device, dataloader, audio_proto, visual_proto):
                     acc_v_p[label[i]] += 1.0
                 if np.asarray(label[i].cpu()) == a_p:
                     acc_a_p[label[i]] += 1.0
+                    
+            
+            # Free memory
+            del spec, image, label, out, out_v, out_a, prediction, pred_v, pred_a, pred_v_p, pred_a_p
 
     return sum(acc) / sum(num), sum(acc_a) / sum(num), sum(acc_v) / sum(num), \
            sum(acc_a_p) / sum(num), sum(acc_v_p) / sum(num)
@@ -544,7 +553,7 @@ def calculate_prototype(args, model, dataloader, device, epoch, a_proto=None, v_
             else:
                 if sample_count >= all_num // 10:
                     break
-
+        
     # Average prototypes per class
     for c in range(audio_prototypes.shape[0]):
         if count_class[c] > 0:
@@ -556,6 +565,9 @@ def calculate_prototype(args, model, dataloader, device, epoch, a_proto=None, v_
         assert a_proto is not None and v_proto is not None, "Previous prototypes (a_proto, v_proto) must be provided after epoch 0"
         audio_prototypes = (1 - args.momentum_coef) * audio_prototypes + args.momentum_coef * a_proto
         visual_prototypes = (1 - args.momentum_coef) * visual_prototypes + args.momentum_coef * v_proto
+    
+    # Free memory
+    del spec, image, label, a, v, out
 
     return audio_prototypes, visual_prototypes
 
@@ -638,9 +650,13 @@ def main():
         model = AVClassifier(args)
 
     model.apply(weight_init)
+    # load weights
+    # Load the checkpoint file
+    checkpoint = torch.load("/home/rakib/PMR/ckpt/Method-CE-Proto-grad-amp/model-VGGSound-concat-bsz16-lr0.001-epoch150-Proto1.0-mon0.2-1-end100-optim-SGDsmall_data/epoch-0.pt")
+    model.load_state_dict(checkpoint['model'])
     model.to(device)
 
-    # model = torch.nn.DataParallel(model, device_ids=gpu_ids)
+    # model = torch.nn.DataParallel(model)
 
     if args.optimizer == 'SGD':
         optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=1e-4)
@@ -655,6 +671,8 @@ def main():
     if args.dataset == 'VGGSound':
         train_dataset = VGGSound(mode='train')
         test_dataset = VGGSound(mode='test')
+        # train_dataset = VGGSoundInMemory(mode='train')
+        # test_dataset = VGGSoundInMemory(mode='test')
     elif args.dataset == 'KineticSound':
         train_dataset = AVDataset(args, mode='train')
         test_dataset = AVDataset(args, mode='test')
@@ -680,18 +698,18 @@ def main():
     print('train:', len(train_dataset), 'test:', len(test_dataset))
         
     # print("\n WARNING: Testing on a small dataset for student \n")
-    # train_dataset = torch.utils.data.Subset(train_dataset, range(100))
+    # train_dataset = torch.utils.data.Subset(train_dataset, range(50000))
     # test_dataset = torch.utils.data.Subset(test_dataset, range(10))
 
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size,
-                                  shuffle=True, pin_memory=True, num_workers=4)  # 计算机的内存充足的时候，可以设置pin_memory=True
+                                  shuffle=True, pin_memory=False, num_workers=4)  # 计算机的内存充足的时候，可以设置pin_memory=True
 
     test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size,
-                                 shuffle=False, pin_memory=True, num_workers=4)
+                                 shuffle=False, pin_memory=False, num_workers=4)
 
-    for spec, image, label in train_dataloader:
-        print(spec.shape, image.shape, label.shape)
-        break
+    # for spec, image, label in train_dataloader:
+    #     print(spec.shape, image.shape, label.shape)
+    #     break
     
     if args.dataset == 'AVE':
         val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size,
@@ -738,7 +756,7 @@ def main():
         else:
             audio_proto, visual_proto = calculate_prototype(args, model, train_dataloader, device, epoch)
 
-        for epoch in range(args.epochs):
+        for epoch in tqdm(range(args.epochs)):
 
             print('Epoch: {}: '.format(epoch))
 
@@ -794,11 +812,16 @@ def main():
                     {
                         'model': model.state_dict(),
                         'optimizer': optimizer.state_dict(),
-                        'scheduler': scheduler.state_dict()
+                        'scheduler': scheduler.state_dict(),
                     },
                     os.path.join(save_path, 'epoch-{}.pt'.format(epoch))
                 )
                 print('Saved model!!!')
+            
+            # Free memory
+            del batch_loss, batch_loss_a, batch_loss_v, batch_loss_a_p, batch_loss_v_p, a_angle, v_angle, ratio_a, ratio_a_p, a_diff, v_diff
+            torch.cuda.empty_cache()
+            
         f_trainloss.close()
 
         print(f"Best Accuracy: {best_acc} found at epoch {epoch} with acc_a_p: {best_acc_a_p}, acc_v_p: {best_acc_v_p}, acc_a: {best_acc_a}, acc_v: {best_acc_v}")

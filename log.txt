@@ -1,0 +1,11 @@
+Namespace(dataset='VGGSound', modulation='Proto', fusion_method='concat', temperature=0.1, fps=1, num_frame=1, optimizer='SGD', batch_size=16, epochs=150, embed_dim=512, momentum_coef=0.2, proto_update_freq=50, learning_rate=0.001, lr_decay_step=70, lr_decay_ratio=0.1, modulation_starts=0, modulation_ends=100, alpha=1.0, ckpt_path='ckpt', train=True, use_tensorboard=False, logs_path='logs', random_seed=0, gpu=0, no_cuda=False, use_cuda=True)
+train: 182608 test: 15336
+Epoch: 0: 
+Start training ... 
+per epoch time:  32026.20113801956
+epoch:  0 loss:  8.223488083690428 2.7863851675569022 6.3979518144688265
+epoch:  0 acc:  0.3272691705790297 acc_v_p:  0.07205268648930621 acc_a_p:  0.2698226395409494
+Saving model....
+Saved model!!!
+Epoch: 1: 
+Start training ... 
